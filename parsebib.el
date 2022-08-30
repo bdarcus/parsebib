@@ -41,6 +41,8 @@
 ;;; Code:
 
 (require 'bibtex)
+(require 'org-element)
+(require 'ol-bibtex)
 (require 'cl-lib)
 (eval-when-compile (require 'subr-x)) ; for `string-join'.
 (eval-and-compile (unless (fboundp 'json-parse-buffer)
@@ -935,6 +937,71 @@ ASCII/Unicode characters.  See the variable
       (when inheritance (parsebib-expand-xrefs entries (if (eq inheritance t) dialect inheritance)))
       (list entries strings (nreverse preambles) (nreverse comments) dialect))))
 
+;;;;;;;;;;;;;;;;;;;;
+;; Org-BibTeX API ;;
+;;;;;;;;;;;;;;;;;;;;
+
+(cl-defun parsebib-parse-org-bibtex-buffer (&key entries strings fields)
+  "Parse the current org buffer and return all org-bibtex data.
+Return a list of five elements: a hash table with the entries, a
+hash table with the @String definitions, a list of @Preamble
+definitions, a list of @Comments and the BibTeX dialect, if
+present in the file.
+
+;; REVIEW: IDK if all of this is needed for org-bibtex
+
+If ENTRIES is a hash table with test function `equal', it is used
+to store the entries.  Any existing entries with identical keys
+are overwritten.  Similarly, if STRINGS is a hash table with test
+function `equal', the @String definitions are stored in it.
+
+If EXPAND-STRINGS is non-nil, abbreviations in the entries and
+@String definitions are expanded using the @String definitions
+already in STRINGS.
+
+If INHERITANCE is non-nil, cross-references in the entries are
+resolved: if the crossref field of an entry points to an entry
+already in ENTRIES, the fields of the latter that do not occur in
+the entry are added to it.  INHERITANCE indicates the inheritance
+schema used for determining which fields inherit from which
+fields.  It can be a symbol `BibTeX' or `biblatex', which means
+to use the default inheritance schema for either dialect, or it
+can be an explicit inheritance schema.  (See the variable
+`parsebib--biblatex-inheritances' for details on the structure of
+such an inheritance schema.)  It can also be the symbol t, in
+which case the local variable block is checked for a
+dialect (using the variable `bibtex-dialect'), or, if no such
+local variable is found, the value of the variable
+`bibtex-dialect'.
+
+FIELDS is a list of the field names (as strings) to be read and
+included in the result.  Fields not in the list are ignored,
+except \"=key=\" and \"=type=\", which are always included.  Case
+is ignored when comparing fields to the list in FIELDS.  If
+FIELDS is nil, all fields are returned.
+
+REPLACE-TEX indicates whether TeX markup should be replaced with
+ASCII/Unicode characters.  See the variable
+`parsebib-TeX-markup-replace-alist' for details."
+  (save-excursion
+    (goto-char (point-min))
+    (or (and (hash-table-p entries)
+             (eq (hash-table-test entries) 'equal))
+        (setq entries (make-hash-table :test #'equal)))
+    (or (and (hash-table-p strings)
+             (eq (hash-table-test strings) 'equal))
+        (setq strings (make-hash-table :test #'equal)))
+    (map-into
+     (org-element-cache-map
+      (lambda (el)
+        (cons (org-bibtex-get org-bibtex-key-property)
+              (mapcar
+               (lambda (field)
+                 (let* ((fieldn (cadr (split-string (downcase (symbol-name field)) ":")))
+                        (fieldv (org-element-property field el)))
+                   (cons fieldn fieldv))) fields)))
+        :granularity 'headline :next-re ":BTYPE:") 'hash-table)))
+
 ;;;;;;;;;;;;;;;;;;
 ;; CSL-JSON API ;;
 ;;;;;;;;;;;;;;;;;;
@@ -1241,6 +1308,10 @@ details.  If FIELDS is nil, all fields are returned."
                                           :stringify display
                                           :year-only display
                                           :fields (mapcar #'intern fields)))
+             ((string= (file-name-extension file t) ".org")
+              (parsebib-parse-org-bibtex-buffer :entries entries
+                                          :strings strings
+                                          :fields fields))
              (t (error "[Parsebib] Not a bibliography file: %s" file)))))
         files)
   entries)
